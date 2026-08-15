@@ -37,7 +37,7 @@ mavenPublishing {
         name.set("IPWho Kotlin SDK")
         description.set("Official Kotlin client for the IPWho IP geolocation API.")
         inceptionYear.set("2026")
-        url.set("https://github.com/lavrox/SDK-IPWho-Kotlin")
+        url.set("https://github.com/lavrox/SDK-IPWho-IP-Geolocation-Kotlin")
         licenses {
             license {
                 name.set("MIT License")
@@ -53,9 +53,9 @@ mavenPublishing {
             }
         }
         scm {
-            url.set("https://github.com/lavrox/SDK-IPWho-Kotlin")
-            connection.set("scm:git:git://github.com/lavrox/SDK-IPWho-Kotlin.git")
-            developerConnection.set("scm:git:ssh://git@github.com/lavrox/SDK-IPWho-Kotlin.git")
+            url.set("https://github.com/lavrox/SDK-IPWho-IP-Geolocation-Kotlin")
+            connection.set("scm:git:git://github.com/lavrox/SDK-IPWho-IP-Geolocation-Kotlin.git")
+            developerConnection.set("scm:git:ssh://git@github.com/lavrox/SDK-IPWho-IP-Geolocation-Kotlin.git")
         }
     }
 }

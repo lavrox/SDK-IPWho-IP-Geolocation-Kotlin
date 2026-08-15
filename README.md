@@ -1,6 +1,6 @@
 # IPWho ([ipwho.org](https://www.ipwho.org)) Kotlin SDK
 
-[![Kotlin](https://img.shields.io/badge/kotlin-1.9-7F52FF.svg)](https://kotlinlang.org/) [![license](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/lavrox/SDK-IPWho-Kotlin/blob/main/LICENSE)
+[![Kotlin](https://img.shields.io/badge/kotlin-1.9-7F52FF.svg)](https://kotlinlang.org/) [![license](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/lavrox/SDK-IPWho-IP-Geolocation-Kotlin/blob/main/LICENSE)
 
 Official Kotlin client for the [IPWho](https://www.ipwho.org) IP Geolocation API. One call returns the **full** payload: geolocation, timezone, flag, currency, connection (ASN/ISP), security, and user-agent when present.
 
@@ -171,7 +171,7 @@ MIT License — see [LICENSE](LICENSE).
 
 - Documentation: [ipwho.org/docs](https://www.ipwho.org/docs)
 - Contact: [ipwho.org/contact](https://www.ipwho.org/contact)
-- GitHub Issues: [lavrox/SDK-IPWho-Kotlin](https://github.com/lavrox/SDK-IPWho-Kotlin/issues)
+- GitHub Issues: [lavrox/SDK-IPWho-IP-Geolocation-Kotlin](https://github.com/lavrox/SDK-IPWho-IP-Geolocation-Kotlin/issues)
 - Website: [ipwho.org](https://www.ipwho.org)
 
 ---
