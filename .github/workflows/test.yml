@@ -19,6 +19,12 @@ jobs:
           distribution: temurin
           java-version: '17'
       - run: ./gradlew --no-daemon test jar
+      - name: Report how many tests ran
+        run: |
+          grep -h '<testsuite ' build/test-results/test/*.xml | sed -E 's/ timestamp=.*//'
+          total=$(grep -ho '<testsuite [^>]*' build/test-results/test/*.xml | sed -E 's/.* tests="([0-9]+)".*/\1/' | awk '{s+=$1} END {print s+0}')
+          echo "Tests run: $total"
+          test "$total" -gt 0
       - name: The published dependency list has no Ktor
         run: |
           ./gradlew --no-daemon generatePomFileForMavenPublication
