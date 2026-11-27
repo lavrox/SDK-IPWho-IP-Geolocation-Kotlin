@@ -147,6 +147,14 @@ class IpWhoClientTest {
     }
 
     @Test
+    fun `a JSON reply is parsed even when another format was asked for`() = runBlocking<Unit> {
+        // The API ignores `format` on /me and answers in JSON.
+        val data = client.me(format = "csv").data!!
+        assertEquals("8.8.8.8", data.ip)
+        assertEquals("United States", data.geoLocation?.country)
+    }
+
+    @Test
     fun `HTTP errors throw with the status code`() = runBlocking<Unit> {
         for ((code, text) in listOf(
             404 to """{"success":false,"message":"Reserved range/Invalid IP address"}""",
@@ -156,6 +164,7 @@ class IpWhoClientTest {
             reply(code, text)
             val error = assertFailsWith<IpWhoApiException> { client.lookup("8.8.8.8") }
             assertEquals(code, error.statusCode)
+            if (code == 401) assertEquals("invalid_api_key", error.message)
             assertFalse(KEY in error.message.orEmpty())
         }
     }

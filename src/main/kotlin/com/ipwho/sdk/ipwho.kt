@@ -6,6 +6,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.JsonTransformingSerializer
 import java.net.URI
 import java.net.URLEncoder
@@ -300,7 +302,8 @@ class IpWhoClient(
         val response = get(path, query)
         throwOnError(response)
 
-        if (format != "json") {
+        // Go by the reply itself: `/me` ignores `format` and always answers in JSON.
+        if (format != "json" && !response.body().trimStart().startsWith("{")) {
             return IpGeoResponse(success = true, data = GeoData(ip = response.body()))
         }
 
@@ -348,10 +351,14 @@ class IpWhoClient(
     private fun throwOnError(response: HttpResponse<String>) {
         val status = response.statusCode()
         if (status in 200..299) return
-        val message = try {
-            json.decodeFromString<ErrorResponse>(response.body()).message
+        val body = try {
+            json.parseToJsonElement(response.body()) as? JsonObject
         } catch (_: Exception) {
             null
+        }
+        // Auth errors carry a code in `error` and no `message`.
+        val message = listOf("message", "error").firstNotNullOfOrNull { key ->
+            (body?.get(key) as? JsonPrimitive)?.contentOrNull
         }
         val fallback = when (status) {
             429 -> "Rate limit exceeded"
