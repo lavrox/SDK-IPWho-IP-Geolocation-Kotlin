@@ -17,12 +17,16 @@ repositories {
 }
 
 dependencies {
-    api("io.ktor:ktor-client-core:2.3.12")
-    api("io.ktor:ktor-client-cio:2.3.12")
-    api("io.ktor:ktor-client-content-negotiation:2.3.12")
-    api("io.ktor:ktor-serialization-kotlinx-json:2.3.12")
     api("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
+
+    testImplementation(kotlin("test"))
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 signing {
