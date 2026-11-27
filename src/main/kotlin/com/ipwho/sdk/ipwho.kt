@@ -1,43 +1,21 @@
-// ---------------------------------------------------------------------------
-// build.gradle.kts
-// ---------------------------------------------------------------------------
-// plugins {
-//     kotlin("jvm") version "1.9.22"
-//     kotlin("plugin.serialization") version "1.9.22"
-//     `maven-publish`
-// }
-//
-// group = "com.ipwho"
-// version = "1.0.0"
-//
-// repositories { mavenCentral() }
-//
-// dependencies {
-//     implementation("io.ktor:ktor-client-core:2.3.8")
-//     implementation("io.ktor:ktor-client-cio:2.3.8")
-//     implementation("io.ktor:ktor-client-content-negotiation:2.3.8")
-//     implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.8")
-//     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
-//     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
-//     testImplementation(kotlin("test"))
-// }
-//
-// java { toolchain { languageVersion.set(JavaLanguageVersion.of(17)) } }
-// ---------------------------------------------------------------------------
-
 package com.ipwho.sdk
 
-import io.ktor.client.*
-import io.ktor.client.call.*
-import io.ktor.client.engine.cio.*
-import io.ktor.client.plugins.contentnegotiation.*
-import io.ktor.client.request.*
-import io.ktor.client.statement.*
-import io.ktor.http.*
-import io.ktor.serialization.kotlinx.json.*
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonTransformingSerializer
+import java.net.URI
+import java.net.URLEncoder
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.time.Duration
+import java.util.concurrent.CompletionException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Exception
@@ -151,7 +129,8 @@ data class UserAgent(
 /// The `data` payload inside a successful `IpGeoResponse`.
 @Serializable
 data class GeoData(
-    @SerialName("ip") val ip: String,
+    /** Empty when a `fields` filter leaves it out. */
+    @SerialName("ip") val ip: String = "",
     @SerialName("geoLocation") val geoLocation: GeoLocation? = null,
     @SerialName("timezone") val timezone: Timezone? = null,
     @SerialName("flag") val flag: Flag? = null,
@@ -176,10 +155,28 @@ data class ErrorResponse(
     @SerialName("message") val message: String? = null
 )
 
+/**
+ * Reads one bulk result. The API sends each row flat:
+ * `{success, ip, geoLocation, ...}` or `{success: false, ip, message}`.
+ * A row already nested under `data` is accepted too.
+ */
+internal object BulkRowSerializer :
+    JsonTransformingSerializer<IpGeoResponse>(IpGeoResponse.serializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement {
+        val row = element as? JsonObject ?: return element
+        if ("data" in row) return row
+        val wrapped = mutableMapOf<String, JsonElement>("data" to row)
+        row["success"]?.let { wrapped["success"] = it }
+        row["message"]?.let { wrapped["message"] = it }
+        return JsonObject(wrapped)
+    }
+}
+
 /// Bulk response wrapping a list of per-IP results.
 @Serializable
 data class BulkData(
-    @SerialName("responseArray") val responseArray: List<IpGeoResponse>? = null
+    @SerialName("responseArray")
+    val responseArray: List<@Serializable(with = BulkRowSerializer::class) IpGeoResponse>? = null
 )
 
 @Serializable
@@ -192,21 +189,45 @@ data class BulkResponse(
 // Client
 // ═══════════════════════════════════════════════════════════════════════════
 
+/**
+ * Client for the IPWho API. HTTP uses Java's built-in [HttpClient].
+ *
+ * API errors throw [IpWhoApiException]. Connection failures and timeouts throw
+ * `java.io.IOException`.
+ *
+ * @param apiKey         Your IPWho API key.
+ * @param client         A custom [HttpClient], for example to use a proxy.
+ * @param baseUrl        Override the API base URL.
+ * @param requestTimeout How long to wait for each response.
+ */
 class IpWhoClient(
-    private val apiKey: String,
-    private val client: HttpClient = defaultHttpClient()
+    apiKey: String,
+    private val client: HttpClient = defaultHttpClient(),
+    baseUrl: String = BASE_URL,
+    private val requestTimeout: Duration = DEFAULT_TIMEOUT
 ) {
+    private val apiKey: String = apiKey.trim()
+    private val baseUrl: String = baseUrl.trimEnd('/')
+
+    private val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+    }
+
+    init {
+        require(this.apiKey.isNotEmpty()) { "apiKey is required" }
+        // The key is sent in a header. Reject it here, without repeating it,
+        // rather than let the HTTP client quote it in an error message.
+        require(this.apiKey.all { it in ' '..'~' }) { "apiKey contains characters that are not allowed" }
+    }
+
     companion object {
         private const val BASE_URL = "https://api.ipwho.org"
+        private const val VERSION = "1.0.0"
+        private val DEFAULT_TIMEOUT: Duration = Duration.ofSeconds(30)
 
-        fun defaultHttpClient(): HttpClient = HttpClient(CIO) {
-            install(ContentNegotiation) {
-                json(Json {
-                    ignoreUnknownKeys = true
-                    isLenient = true
-                })
-            }
-        }
+        fun defaultHttpClient(): HttpClient =
+            HttpClient.newBuilder().connectTimeout(DEFAULT_TIMEOUT).build()
     }
 
     // ── Public API ─────────────────────────────────────────────────────
@@ -215,7 +236,8 @@ class IpWhoClient(
      * Look up geolocation data for a specific IP address.
      *
      * @param ip    IPv4 or IPv6 address.
-     * @param format Response format ("json", "xml", "csv").
+     * @param format Response format ("json", "xml", "csv"). For "xml" and "csv",
+     *               `data.ip` holds the raw response text.
      * @param fields Optional comma-separated field filter (e.g. "geoLocation,timezone").
      * @return IpGeoResponse with nested data.
      */
@@ -224,7 +246,7 @@ class IpWhoClient(
         format: String = "json",
         fields: String? = null
     ): IpGeoResponse {
-        return request("/ip/$ip", format, fields)
+        return request("/ip/${encode(ip)}", format, fields)
     }
 
     /**
@@ -245,32 +267,24 @@ class IpWhoClient(
      * Perform a bulk IP lookup.
      *
      * @param ips List of IPv4/IPv6 addresses.
-     * @return BulkResponse wrapping an array of IpGeoResponse objects.
+     * @return BulkResponse with one IpGeoResponse per address. Check each row's
+     *         `success`. A failed row has a `message`, and its `data` holds only the `ip`.
      */
     suspend fun bulk(ips: List<String>): BulkResponse {
         require(ips.isNotEmpty()) { "IP list must not be empty" }
-        val bulkParam = ips.joinToString(",")
-        val response: HttpResponse = client.get("$BASE_URL/bulk/$bulkParam") {
-            parameter("apiKey", apiKey)
-        }
+        val bulkParam = ips.joinToString(",") { encode(it) }
+        val response = get("/bulk/$bulkParam", emptyList())
+        throwOnError(response)
 
-        if (response.status == HttpStatusCode.TooManyRequests) {
-            val err = try { response.body<ErrorResponse>() } catch (_: Exception) { null }
-            throw IpWhoApiException(err?.message ?: "Rate limit exceeded", response.status.value)
-        }
-        if (!response.status.isSuccess()) {
-            val err = try { response.body<ErrorResponse>() } catch (_: Exception) { null }
-            throw IpWhoApiException(
-                err?.message ?: "Request failed: ${response.status}",
-                response.status.value
-            )
-        }
-
-        return try {
-            response.body()
+        val result = try {
+            json.decodeFromString<BulkResponse>(response.body())
         } catch (e: Exception) {
-            throw IpWhoApiException("Failed to parse bulk response: ${e.message}", response.status.value)
+            throw IpWhoApiException("Failed to parse bulk response: ${e.message}", response.statusCode())
         }
+        if (!result.success) {
+            throw IpWhoApiException("API returned success=false for bulk request", response.statusCode())
+        }
+        return result
     }
 
     // ── Internal ───────────────────────────────────────────────────────
@@ -280,39 +294,71 @@ class IpWhoClient(
         format: String,
         fields: String?
     ): IpGeoResponse {
-        val response: HttpResponse = client.get("$BASE_URL$path") {
-            parameter("apiKey", apiKey)
-            if (format != "json") parameter("format", format)
-            if (!fields.isNullOrBlank()) parameter("get", fields)
+        val query = mutableListOf<Pair<String, String>>()
+        if (format != "json") query.add("format" to format)
+        if (!fields.isNullOrBlank()) query.add("get" to fields)
+        val response = get(path, query)
+        throwOnError(response)
+
+        if (format != "json") {
+            return IpGeoResponse(success = true, data = GeoData(ip = response.body()))
         }
 
-        if (response.status == HttpStatusCode.TooManyRequests) {
-            val err = try { response.body<ErrorResponse>() } catch (_: Exception) { null }
-            throw IpWhoApiException(err?.message ?: "Rate limit exceeded", response.status.value)
-        }
-        if (response.status == HttpStatusCode.NotFound) {
-            val err = try { response.body<ErrorResponse>() } catch (_: Exception) { null }
-            throw IpWhoApiException(err?.message ?: "IP not found", response.status.value)
-        }
-        if (!response.status.isSuccess()) {
-            val err = try { response.body<ErrorResponse>() } catch (_: Exception) { null }
-            throw IpWhoApiException(
-                err?.message ?: "Request failed: ${response.status}",
-                response.status.value
-            )
-        }
-
-        return try {
-            val wrapper = response.body<IpGeoResponse>()
-            if (!wrapper.success) {
-                throw IpWhoApiException(wrapper.message ?: "API returned success=false", response.status.value)
-            }
-            wrapper
-        } catch (e: IpWhoApiException) {
-            throw e
+        val wrapper = try {
+            json.decodeFromString<IpGeoResponse>(response.body())
         } catch (e: Exception) {
-            throw IpWhoApiException("Failed to parse response: ${e.message}", response.status.value)
+            throw IpWhoApiException("Failed to parse response: ${e.message}", response.statusCode())
         }
+        if (!wrapper.success) {
+            throw IpWhoApiException(wrapper.message ?: "API returned success=false", response.statusCode())
+        }
+        return wrapper
+    }
+
+    private fun encode(value: String): String =
+        URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+
+    /** Sends one GET request. The API key goes in a header, not in the URL. */
+    private suspend fun get(path: String, query: List<Pair<String, String>>): HttpResponse<String> {
+        val queryString =
+            if (query.isEmpty()) ""
+            else query.joinToString("&", prefix = "?") { (name, value) -> "$name=${encode(value)}" }
+        val request = HttpRequest.newBuilder(URI.create(baseUrl + path + queryString))
+            .timeout(requestTimeout)
+            .header("Accept", "application/json")
+            .header("Authorization", "Bearer $apiKey")
+            .header("User-Agent", "ipwho-kotlin-sdk/$VERSION")
+            .GET()
+            .build()
+
+        return suspendCancellableCoroutine { continuation ->
+            val pending = client.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+            continuation.invokeOnCancellation { pending.cancel(true) }
+            pending.whenComplete { response, error ->
+                if (error != null) {
+                    val cause = if (error is CompletionException) error.cause ?: error else error
+                    continuation.resumeWithException(cause)
+                } else {
+                    continuation.resume(response)
+                }
+            }
+        }
+    }
+
+    private fun throwOnError(response: HttpResponse<String>) {
+        val status = response.statusCode()
+        if (status in 200..299) return
+        val message = try {
+            json.decodeFromString<ErrorResponse>(response.body()).message
+        } catch (_: Exception) {
+            null
+        }
+        val fallback = when (status) {
+            429 -> "Rate limit exceeded"
+            404 -> "IP not found"
+            else -> "Request failed: HTTP $status"
+        }
+        throw IpWhoApiException(message ?: fallback, status)
     }
 }
 

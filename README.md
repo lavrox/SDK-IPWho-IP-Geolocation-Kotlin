@@ -19,7 +19,7 @@ Open a free [Lavrox](https://lavrox.com) account to get an API key for [IPWho](h
 implementation("com.lavrox:ipwho-kotlin:1.0.0")
 ```
 
-JDK 17+, Ktor, kotlinx.serialization, coroutines. Apply `kotlin("plugin.serialization")`. Package: `com.ipwho.sdk`.
+JDK 17+. HTTP uses Java's built-in `HttpClient`; the library dependencies are kotlinx.serialization (JSON) and kotlinx.coroutines. Apply `kotlin("plugin.serialization")`. Package: `com.ipwho.sdk`.
 
 ## Quick Start
 
@@ -48,7 +48,9 @@ IpGeoResponse
     └── userAgent
 ```
 
-Bulk: `BulkResponse.data.responseArray: List<IpGeoResponse>?`.
+Bulk: `BulkResponse.data.responseArray: List<IpGeoResponse>?`, one per address. Check each row's `success`. A failed row has a `message`, and its `data` holds only the `ip`.
+
+The client sends your API key in the `Authorization` header, so it isn't part of the request URL.
 
 ## Reading the full response (8.8.8.8)
 
@@ -105,20 +107,22 @@ println(data?.userAgent?.browser?.name)
 println(client.me().data?.ip)
 
 val bulk = client.bulk(listOf("8.8.8.8", "1.1.1.1"))
-println(bulk.data?.responseArray?.size)
+for (row in bulk.data?.responseArray.orEmpty()) {
+    println("${row.data?.ip} ${if (row.success) row.data?.geoLocation?.country else row.message}")
+}
 ```
 
-`lookup` / `me` take `format` (`json`/`xml`/`csv`) and optional `fields`.
+`lookup` / `me` take `format` (`json`/`xml`/`csv`) and optional `fields`. For `xml` and `csv`, `data.ip` holds the raw response text.
 
 ## API Reference
 
-### `IpWhoClient(apiKey, client = defaultHttpClient())`
+### `IpWhoClient(apiKey, client = defaultHttpClient(), baseUrl, requestTimeout)`
 
-Query `apiKey`. Host `https://api.ipwho.org`.
+The key is sent as `Authorization: Bearer`. `client` is a `java.net.http.HttpClient`. `baseUrl` defaults to `https://api.ipwho.org`; `requestTimeout` to 30 seconds.
 
 ### Errors
 
-`IpWhoApiException(message, statusCode)` including HTTP 429.
+`IpWhoApiException(message, statusCode)` for API errors, including HTTP 429. Connection failures and timeouts throw `java.io.IOException`.
 
 ## Type Definitions
 
@@ -146,16 +150,16 @@ Also `Timezone`, `Flag`, `Currency` (`namePlural`), `Connection` (`asnNumber`, `
 ## Troubleshooting
 
 - Key: [ipwho.org](https://www.ipwho.org).
-- HTTP 403: keep the default Ktor client headers.
+- HTTP 403: the API rejects a blank User-Agent. The SDK sends `ipwho-kotlin-sdk/1.0.0`.
 - Null nested objects on some IPs.
 
 ## Testing
 
 ```bash
-IPWHO_API_KEY=your_key ./gradlew run
+./gradlew test
 ```
 
-The live check is `examples/test_ipwho.kt`.
+These tests need no API key: they run against a local stand-in server. `examples/test_ipwho.kt` is a live check, which uses lookups from your quota.
 
 ## Changelog
 
